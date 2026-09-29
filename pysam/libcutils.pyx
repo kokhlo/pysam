@@ -298,7 +298,42 @@ cdef int libc_whence_from_io(int whence):
     if whence == 0: return SEEK_SET
     if whence == 1: return SEEK_CUR
     if whence == 2: return SEEK_END
-    return whence  # Otherwise likely invalid, but let HTSlib or OS report it
+    return whence  # Otherwise likely invalid, but let HTSlib or OS report this
+
+
+@contextmanager
+def closed_stdin():
+    '''Give the samtools/bcftools code an empty stdin for the duration of the call.
+
+    samtools and bcftools read from file descriptor 0 whenever no input file
+    is named, or whenever the input file is "-".  They run inside this process
+    and would otherwise inherit the caller's stdin.  A terminal, or a notebook
+    kernel holding a pipe open, never reaches end of file, so the read blocks
+    forever: the call hangs, and because the interpreter waits inside C code
+    it cannot be interrupted with KeyboardInterrupt either.
+
+    Redirecting stdin from /dev/null turns the blocking read into an immediate
+    end of file.  Only a terminal is redirected; a pipe or a regular file that
+    the caller set up deliberately is left alone so that streamed input keeps
+    working.
+    '''
+    cdef int saved_stdin = -1
+    cdef int devnull_h = -1
+
+    if isatty(STDIN_FILENO):
+        devnull_h = c_open(b"/dev/null", O_RDONLY)
+        if devnull_h != -1:
+            saved_stdin = c_dup(STDIN_FILENO)
+            if saved_stdin != -1:
+                c_dup2(devnull_h, STDIN_FILENO)
+    try:
+        yield
+    finally:
+        if saved_stdin != -1:
+            c_dup2(saved_stdin, STDIN_FILENO)
+            os.close(saved_stdin)
+        if devnull_h != -1:
+            os.close(devnull_h)
 
 
 @contextmanager
